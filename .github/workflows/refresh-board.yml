@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       fast:
-        description: 'Skip candlesticks (quicker, drops momentum)'
+        description: 'Skip price history (quicker, drops momentum arrows)'
         type: boolean
         default: false
 

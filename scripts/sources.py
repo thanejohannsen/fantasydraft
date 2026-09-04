@@ -62,7 +62,7 @@ class Http:
         if self.throttle > self.base:
             self.throttle = max(self.base, self.throttle * 0.92)
 
-    def get(self, url, headers=None, tries=5, timeout=45):
+    def get(self, url, headers=None, tries=5, timeout=20):
         delay = self.throttle
         for attempt in range(tries):
             wait = self._last + self.throttle - time.time()

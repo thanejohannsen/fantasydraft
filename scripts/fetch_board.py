@@ -31,6 +31,20 @@ import sources
 from sources import ESPN_POS, ESPN_TEAM, Http, Kalshi
 
 SEASON = int(os.environ.get("FF_SEASON", "2026"))
+
+# Hard ceiling on the whole build. Kalshi is dramatically slower from a shared
+# CI runner IP than from a laptop, and an unbounded build just sits until the
+# job timeout kills it, producing nothing. Exceeding this raises, which leaves
+# the previously committed board in place -- stale data beats no data.
+DEADLINE_S = float(os.environ.get("FF_DEADLINE_S", "600"))
+_started_at = time.time()
+
+
+def check_deadline(phase):
+    if time.time() - _started_at > DEADLINE_S:
+        raise TimeoutError(
+            f"build exceeded {DEADLINE_S:.0f}s during {phase}; "
+            f"keeping the existing board rather than shipping a partial one")
 PRIOR_SEASON = SEASON - 1
 
 SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
@@ -197,6 +211,7 @@ def load_kalshi(http, fast=False):
 
     for pos, ladders in model.LADDERS.items():
         for n, event in ladders:
+            check_deadline(f"ladder {event}")
             try:
                 markets = k.markets(event)
             except Exception as e:
