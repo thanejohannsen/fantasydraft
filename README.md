@@ -116,7 +116,20 @@ actually is, so a run on QBs shows up as the plan moving QB earlier.
 2. Open it on your phone and **Add to Home Screen**. It caches itself, so it
    works with no signal at the draft venue.
 3. Before the draft, force a fresh board: Actions → *Refresh draft board* →
-   *Run workflow*.
+   *Run workflow*, then tap **Check for updates** in the app's menu.
+
+### Refreshing
+
+Two separate things can be stale, and the menu shows both:
+
+- **Market data** — refreshed every 6 hours by the Action, or on demand via
+  *Run workflow*. **Check for updates** re-fetches it without a reload.
+- **The app itself** — the service worker serves the cached copy instantly so
+  the tool works with no signal, then refreshes it in the background. New code
+  lands on the next open; nothing ever swaps under a running page, because code
+  changing mid-draft is worse than code being a day old. **Check for updates**
+  compares what you are *running* against the server and offers a one-tap
+  reload that pulls the new shell first.
 
 The board otherwise refreshes every 6 hours on its own.
 

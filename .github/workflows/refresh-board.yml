@@ -23,6 +23,15 @@ jobs:
   refresh:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+
+    # Secrets are read here, at job level, because the `secrets` context is not
+    # available inside a step's `if:` -- only `env` is. Referencing it there
+    # invalidates the whole workflow file, which is why every earlier run ended
+    # in a startup failure with zero jobs and the board never refreshed.
+    env:
+      KALSHI_KEY_ID: ${{ secrets.KALSHI_KEY_ID }}
+      KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+
     steps:
       - uses: actions/checkout@v4
 
@@ -34,14 +43,13 @@ jobs:
       # requests with RSA-PSS. Everything else is stdlib, and the fetcher falls
       # back to public access if the secret is absent.
       - name: Install optional auth dependency
-        if: secrets.KALSHI_KEY_ID != ''
+        if: env.KALSHI_KEY_ID != ''
         run: pip install --quiet cryptography
 
+      # `inputs` is only populated for workflow_dispatch; github.event.inputs is
+      # safe to evaluate on a schedule run too.
       - name: Build board
-        env:
-          KALSHI_KEY_ID: ${{ secrets.KALSHI_KEY_ID }}
-          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
-        run: python3 scripts/fetch_board.py ${{ inputs.fast && '--fast' || '' }}
+        run: python3 scripts/fetch_board.py ${{ github.event.inputs.fast == 'true' && '--fast' || '' }}
 
       - name: Sanity-check the board before committing
         run: python3 scripts/check_board.py

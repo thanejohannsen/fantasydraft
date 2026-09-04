@@ -9,6 +9,7 @@ import { planRounds } from './planner.js';
 
 const $ = (id) => document.getElementById(id);
 const STORE = 'ffdraft.v1';
+const CACHE_NAME = 'ffdraft-v2';   // must match sw.js
 
 let board = null;
 let league = { ...DEFAULT_LEAGUE };
@@ -17,6 +18,8 @@ let plan = [];
 let filterPos = null;
 let query = '';
 let ctx = null;
+let swReg = null;
+let updateReady = false;
 
 /* ------------------------------------------------------------ persistence */
 
@@ -170,6 +173,106 @@ function renderStrip() {
   if (now) now.scrollIntoView({ block: 'nearest', inline: 'center' });
 }
 
+
+
+/* ------------------------------------------------------------- updating */
+
+/** Pull the shell from the network, then reload, so one tap really does land
+ *  the new version rather than the one after it. */
+function reloadWithFreshShell() {
+  const sw = navigator.serviceWorker?.controller;
+  if (!sw) { location.reload(); return; }
+  let done = false;
+  const finish = () => { if (!done) { done = true; location.reload(); } };
+  navigator.serviceWorker.addEventListener('message', function onMsg(e) {
+    if (e.data?.type === 'shell-refreshed') {
+      navigator.serviceWorker.removeEventListener('message', onMsg);
+      finish();
+    }
+  });
+  sw.postMessage({ type: 'refresh-shell' });
+  setTimeout(finish, 4000);   // never leave the user stuck on a spinner
+}
+
+
+/* The service worker refreshes the cached app in the background, but nothing
+   swaps under a running page -- reloading is always the user's call, since new
+   code appearing mid-draft would be worse than code being a day old. */
+function flagUpdate() {
+  if (updateReady) return;
+  updateReady = true;
+  renderFreshness();
+  toast('New version ready', reloadWithFreshShell, 'Reload');
+}
+
+function renderFreshness() {
+  const el = $('freshness');
+  if (!el || !board) return;
+  const when = new Date(board.generated_at.replace(' ', 'T'));
+  const hours = Math.max(0, (Date.now() - when.getTime()) / 3.6e6);
+  const age = hours < 1 ? 'just now'
+    : hours < 24 ? `${Math.round(hours)}h ago`
+    : `${Math.round(hours / 24)}d ago`;
+  el.innerHTML =
+    `<div class="fresh-line"><span>Market data</span><b>${age}</b></div>` +
+    `<div class="fresh-line"><span>App</span><b>${updateReady ? 'update ready — reload' : 'up to date'}</b></div>`;
+}
+
+/* A page cannot read the source it is running, so it records a fingerprint of
+   the app file at boot -- before the background revalidation has had time to
+   overwrite it. Comparing that against the server is the only check that
+   answers the question that matters: is what I am *running* current? Comparing
+   the cache against the server cannot, because stale-while-revalidate has
+   already refreshed the cache while the old code is still executing. */
+const APP_FILE = 'assets/app.js';
+let runningVersion = null;
+
+async function fingerprint(res) {
+  if (!res) return null;
+  return res.headers.get('etag') || res.headers.get('content-length')
+    || String((await res.clone().text()).length);
+}
+
+async function snapshotVersion() {
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    runningVersion = await fingerprint(await cache.match(APP_FILE));
+  } catch { /* no Cache API (private mode): update checks degrade to reload */ }
+}
+
+/** Ask the browser to look for a new version now, rather than on its own schedule. */
+async function checkForUpdates() {
+  toast('Checking…');
+  let newData = false;
+  try {
+    if (swReg) await swReg.update();
+
+    // cache: 'reload' bypasses both the HTTP cache and the service worker.
+    const res = await fetch('data/board.json', { cache: 'reload' });
+    const fresh = await res.json();
+    if (fresh.generated_at !== board.generated_at) {
+      board = fresh;
+      delete board._byId;
+      newData = true;
+    }
+
+    const appRes = await fetch(APP_FILE, { cache: 'reload' });
+    const serverVersion = await fingerprint(appRes);
+    if (runningVersion && serverVersion && serverVersion !== runningVersion) {
+      updateReady = true;
+    }
+  } catch {
+    toast('Could not reach the network');
+    return;
+  }
+
+  if (newData) { rebuildPlan(); render(); }
+  renderFreshness();
+
+  if (updateReady) toast('New version ready', reloadWithFreshShell, 'Reload');
+  else if (newData) toast('New market data loaded');
+  else toast('Already up to date');
+}
 
 /* ------------------------------------------------------------- strategy */
 
@@ -449,6 +552,7 @@ function renderMenu() {
       + (unfilled ? `<div class="roster-line"><span>Still needed</span><span>${unfilled}</span></div>` : '');
   }
   renderPickFix();
+  renderFreshness();
   $('menu').hidden = false;
 }
 
@@ -470,16 +574,16 @@ let toastTimer;
 
 /* A tap commits immediately, so the correction belongs next to the action
    rather than only in the header. */
-function toast(msg, onUndo) {
+function toast(msg, onAction, label = 'Undo') {
   const t = $('toast');
   t.textContent = '';
   t.append(msg);
-  if (onUndo) {
+  if (onAction) {
     const b = document.createElement('button');
     b.className = 'toast-undo';
     b.type = 'button';
-    b.textContent = 'Undo';
-    b.addEventListener('click', () => { t.hidden = true; onUndo(); });
+    b.textContent = label;
+    b.addEventListener('click', () => { t.hidden = true; onAction(); });
     t.append(b);
   }
   t.hidden = false;
@@ -490,6 +594,7 @@ function toast(msg, onUndo) {
 /* ------------------------------------------------------------------- boot */
 
 async function boot() {
+  await snapshotVersion();
   try {
     const res = await fetch('data/board.json', { cache: 'no-cache' });
     board = await res.json();
@@ -527,6 +632,7 @@ async function boot() {
     if (act === 'pick-') return nudgePick(-1);
     if (act === 'pick+') return nudgePick(1);
     if (act === 'replan') { closeSheets(); rebuildPlan(); render(); toast('Round plan updated'); }
+    if (act === 'update') return checkForUpdates();
     if (act === 'strategy') { $('menu').hidden = true; renderStrategy(); }
     if (act === 'news') { $('menu').hidden = true; renderNews(); }
     if (act === 'reset') {
@@ -545,8 +651,15 @@ async function boot() {
 
   // Must be served from the site root: a worker at assets/sw.js would get
   // scope /assets/ and could not control the page it is meant to cache.
+  // updateViaCache 'none' keeps the browser's HTTP cache from serving a stale
+  // copy of the worker itself, which would hide updates for up to its max-age.
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then((reg) => { swReg = reg; })
+      .catch(() => {});
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data?.type === 'update-ready') flagUpdate();
+    });
   }
 }
 
