@@ -188,6 +188,7 @@ def load_kalshi(http, fast=False):
     k = Kalshi(http, os.environ.get("KALSHI_KEY_ID"),
                os.environ.get("KALSHI_PRIVATE_KEY"))
     print(f"Kalshi: fetching ladders ({'authenticated' if k.authed else 'public'})...")
+    ladders_started = time.time()
 
     raw = defaultdict(lambda: defaultdict(dict))   # pos -> player -> {n: prob}
     meta = defaultdict(dict)                       # pos -> player -> quote info
@@ -232,6 +233,9 @@ def load_kalshi(http, fast=False):
                 raw[pos][key][n] = v
             print(f"  {event:<30} {len(layer):>3} players  raw sum={total:.2f} (target {n})")
 
+    print(f"  ladders done in {time.time() - ladders_started:.0f}s "
+          f"({http.limited} rate-limit hits, pace {http.throttle:.1f}s)")
+
     cdfs, momentum = {}, {}
     for pos, ladders in model.LADDERS.items():
         ns = [n for n, _ in ladders]
@@ -243,7 +247,7 @@ def load_kalshi(http, fast=False):
         # Kalshi throttles a shared CI runner IP far harder than a laptop, and a
         # board that ships without trend arrows beats a job that times out with
         # no board at all.
-        budget = float(os.environ.get("FF_MOMENTUM_BUDGET_S", "300"))
+        budget = float(os.environ.get("FF_MOMENTUM_BUDGET_S", "180"))
         started = time.time()
 
         # Spend the budget on the players it would actually change a decision
@@ -253,8 +257,13 @@ def load_kalshi(http, fast=False):
             ((k_, t) for k_, t in tickers.items() if t),
             key=lambda kt: -(meta[kt[0][0]].get(kt[0][1], {}).get("oi") or 0),
         )
+        # Most of these markets are too thin to clear the volume and spread
+        # filters anyway -- locally only ~33 of 167 yield usable momentum -- so
+        # the long tail is calls spent to learn nothing.
+        limit = int(os.environ.get("FF_MOMENTUM_MARKETS", "70"))
+        ranked = ranked[:limit]
         print(f"Kalshi: candlesticks for momentum "
-              f"({len(ranked)} markets, {budget:.0f}s budget)...")
+              f"({len(ranked)} deepest markets, {budget:.0f}s budget)...")
 
         done = 0
         for (pos, key), ticker in ranked:
@@ -276,14 +285,18 @@ def load_kalshi(http, fast=False):
 
 def build(fast=False):
     http = Http()
+    t0 = time.time()
     espn, actuals = load_espn(http)
+    print(f"  [{time.time() - t0:.0f}s elapsed]")
     curves = model.rank_points_curve(actuals)
     print("Rank curve from %d actuals: %s" % (
         sum(len(v) for v in actuals.values()),
         ", ".join(f"{p}1={c[0]:.0f}/{p}12={c[min(11, len(c) - 1)]:.0f}"
                   for p, c in sorted(curves.items()))))
 
+    t1 = time.time()
     cdfs, meta, ladder_error, momentum, authed = load_kalshi(http, fast)
+    print(f"  [Kalshi phase {time.time() - t1:.0f}s, total {time.time() - t0:.0f}s]")
 
     espn_by_pos = defaultdict(dict)
     for (pos, key), rec in espn.items():

@@ -29,6 +29,11 @@ THROTTLE_S = 0.4
 
 MAX_THROTTLE_S = 4.0
 
+# A single call must never be able to sit for minutes. Five tries with doubling
+# sleeps stacked on a raised throttle could burn ~30s on one request, and 19
+# essential ladder calls of that is most of a job timeout.
+MAX_RETRY_SLEEP_S = 6.0
+
 
 class Http:
     """Throttled JSON fetcher with adaptive pacing and backoff on 429/5xx.
@@ -80,7 +85,7 @@ class Http:
                     self._slow_down()
                 if not retryable or attempt == tries - 1:
                     raise
-                delay = max(delay * 2, self.throttle)
+                delay = min(MAX_RETRY_SLEEP_S, max(delay * 2, self.throttle))
                 if self.verbose:
                     print(f"    HTTP {e.code}, backing off {delay:.1f}s "
                           f"(pace now {self.throttle:.1f}s)")
@@ -89,7 +94,7 @@ class Http:
                 self._last = time.time()
                 if attempt == tries - 1:
                     raise
-                delay *= 2
+                delay = min(MAX_RETRY_SLEEP_S, delay * 2)
                 time.sleep(delay)
         raise RuntimeError(f"unreachable: {url}")
 
@@ -158,11 +163,13 @@ class Kalshi:
         return self.http.get(KALSHI + path, self._headers(path)).get("markets", [])
 
     def candles(self, series, ticker, days=30):
+        """Optional data, so it gets two tries and then gets out of the way."""
         now = int(time.time())
         path = (f"/series/{series}/markets/{ticker}/candlesticks"
                 f"?start_ts={now - days * 86400}&end_ts={now}&period_interval=1440")
         try:
-            return self.http.get(KALSHI + path, self._headers(path)).get("candlesticks", [])
+            return self.http.get(KALSHI + path, self._headers(path),
+                                 tries=2).get("candlesticks", [])
         except Exception:
             return []
 
