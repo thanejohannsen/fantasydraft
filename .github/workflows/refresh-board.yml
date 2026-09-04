@@ -1,0 +1,59 @@
+name: Refresh draft board
+
+on:
+  schedule:
+    # Every 6 hours. Season-long markets move slowly, so this is plenty --
+    # and you can always force a run right before the draft.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      fast:
+        description: 'Skip candlesticks (quicker, drops momentum)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-board
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Only needed for the optional authenticated Kalshi path, which signs
+      # requests with RSA-PSS. Everything else is stdlib, and the fetcher falls
+      # back to public access if the secret is absent.
+      - name: Install optional auth dependency
+        if: secrets.KALSHI_KEY_ID != ''
+        run: pip install --quiet cryptography
+
+      - name: Build board
+        env:
+          KALSHI_KEY_ID: ${{ secrets.KALSHI_KEY_ID }}
+          KALSHI_PRIVATE_KEY: ${{ secrets.KALSHI_PRIVATE_KEY }}
+        run: python3 scripts/fetch_board.py ${{ inputs.fast && '--fast' || '' }}
+
+      - name: Sanity-check the board before committing
+        run: python3 scripts/check_board.py
+
+      - name: Commit if changed
+        run: |
+          if git diff --quiet -- data/board.json; then
+            echo "Board unchanged; nothing to commit."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/board.json
+          git commit -m "Refresh draft board ($(date -u '+%Y-%m-%d %H:%M UTC'))"
+          git push
