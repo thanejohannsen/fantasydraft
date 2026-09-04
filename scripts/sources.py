@@ -27,14 +27,35 @@ ESPN_SITE = "https://site.api.espn.com/apis/site/v2/sports/football/nfl"
 THROTTLE_S = 0.4
 
 
+MAX_THROTTLE_S = 4.0
+
+
 class Http:
-    """Throttled JSON fetcher with backoff on 429/5xx."""
+    """Throttled JSON fetcher with adaptive pacing and backoff on 429/5xx.
+
+    The pacing has to *persist* across calls, not just retry the one that got
+    limited. An earlier version backed off within a call and then reset to the
+    base delay for the next one, which on a shared CI runner IP just walked
+    straight back into the limit -- a run that takes five minutes locally sat
+    past twenty minutes on a GitHub runner and was heading for the job timeout.
+    So a 429 slows every subsequent request, and success gradually speeds back up.
+    """
 
     def __init__(self, throttle=THROTTLE_S, verbose=True):
+        self.base = throttle
         self.throttle = throttle
         self.verbose = verbose
         self._last = 0.0
         self.calls = 0
+        self.limited = 0
+
+    def _slow_down(self):
+        self.throttle = min(MAX_THROTTLE_S, max(self.throttle * 1.8, self.base * 2))
+        self.limited += 1
+
+    def _speed_up(self):
+        if self.throttle > self.base:
+            self.throttle = max(self.base, self.throttle * 0.92)
 
     def get(self, url, headers=None, tries=5, timeout=45):
         delay = self.throttle
@@ -50,15 +71,19 @@ class Http:
                         raw = gzip.decompress(raw)
                 self._last = time.time()
                 self.calls += 1
+                self._speed_up()
                 return json.loads(raw)
             except urllib.error.HTTPError as e:
                 self._last = time.time()
                 retryable = e.code == 429 or e.code >= 500
+                if e.code == 429:
+                    self._slow_down()
                 if not retryable or attempt == tries - 1:
                     raise
-                delay *= 2
+                delay = max(delay * 2, self.throttle)
                 if self.verbose:
-                    print(f"    HTTP {e.code}, backing off {delay:.1f}s")
+                    print(f"    HTTP {e.code}, backing off {delay:.1f}s "
+                          f"(pace now {self.throttle:.1f}s)")
                 time.sleep(delay)
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
                 self._last = time.time()

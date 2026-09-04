@@ -239,16 +239,38 @@ def load_kalshi(http, fast=False):
             cdfs[pos] = model.calibrate_position(raw[pos], ns)
 
     if not fast:
-        print("Kalshi: pulling 30-day candlesticks for momentum...")
-        for (pos, key), ticker in tickers.items():
-            if not ticker:
-                continue
+        # Momentum is a tiebreaker, not the deliverable, so it runs on a clock.
+        # Kalshi throttles a shared CI runner IP far harder than a laptop, and a
+        # board that ships without trend arrows beats a job that times out with
+        # no board at all.
+        budget = float(os.environ.get("FF_MOMENTUM_BUDGET_S", "300"))
+        started = time.time()
+
+        # Spend the budget on the players it would actually change a decision
+        # for: deepest books first, since a thin market contributes no signal
+        # anyway and would just burn the clock.
+        ranked = sorted(
+            ((k_, t) for k_, t in tickers.items() if t),
+            key=lambda kt: -(meta[kt[0][0]].get(kt[0][1], {}).get("oi") or 0),
+        )
+        print(f"Kalshi: candlesticks for momentum "
+              f"({len(ranked)} markets, {budget:.0f}s budget)...")
+
+        done = 0
+        for (pos, key), ticker in ranked:
+            if time.time() - started > budget:
+                print(f"  budget reached after {done}/{len(ranked)}; "
+                      f"shipping without momentum for the rest")
+                break
             candles = k.candles("KXNFLFFLEADER", ticker)
+            done += 1
             if not candles:
                 continue
             mom = price_momentum(candles)
             if mom:
                 momentum[(pos, key)] = mom
+        print(f"  momentum for {len(momentum)} players "
+              f"({http.limited} rate-limit hits, pace {http.throttle:.1f}s)")
     return cdfs, meta, ladder_error, momentum, k.authed
 
 
