@@ -65,6 +65,7 @@
   <div class="controls">
     <input id="search" type="search" placeholder="Search players…"
            autocomplete="off" autocorrect="off" spellcheck="false">
+    <p class="tap-hint">Tap a player to log the pick · hold for details</p>
     <div class="chips tight" id="posFilter"></div>
   </div>
 
@@ -75,19 +76,39 @@
       <div class="sheet-name" id="sheetName"></div>
       <div class="sheet-meta" id="sheetMeta"></div>
       <div class="sheet-note" id="sheetNote"></div>
-      <button class="primary" data-act="mine">I drafted this</button>
-      <button class="secondary" data-act="gone">Someone else drafted this</button>
-      <button class="ghost" data-act="cancel">Cancel</button>
+      <button class="ghost" data-act="close">Close</button>
     </div>
   </div>
 
   <div class="sheet" id="menu" hidden>
     <div class="sheet-card">
       <div class="sheet-name">Draft</div>
+      <div class="pick-fix">
+        <div>
+          <div class="pick-fix-label">On the clock</div>
+          <div class="pick-fix-value" id="pickFixValue">Pick 1 · Team 1</div>
+        </div>
+        <div class="stepper">
+          <button type="button" data-act="pick-" aria-label="Previous pick">−</button>
+          <button type="button" data-act="pick+" aria-label="Next pick">+</button>
+        </div>
+      </div>
+      <p class="pick-fix-note">Only corrects the counter if it has drifted out of
+        sync with the room. It does not add or remove anyone from the board.</p>
       <div id="myRoster" class="roster"></div>
+      <button class="secondary" data-act="strategy">What's coming before my pick</button>
       <button class="secondary" data-act="replan">Recompute round plan</button>
       <button class="ghost" data-act="news">Latest NFL news</button>
       <button class="ghost danger" data-act="reset">Reset draft</button>
+      <button class="ghost" data-act="close">Close</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="stratSheet" hidden>
+    <div class="sheet-card">
+      <div class="sheet-name">Before your next pick</div>
+      <div class="sheet-meta" id="stratHead"></div>
+      <div id="stratBody" class="strat"></div>
       <button class="ghost" data-act="close">Close</button>
     </div>
   </div>

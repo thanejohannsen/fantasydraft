@@ -2,7 +2,8 @@
    loads the board, keeps draft state in localStorage, and renders. */
 
 import {
-  DEFAULT_LEAGUE, POSITIONS, myPicks, roundOf, recommend, explain, rosterNeed,
+  DEFAULT_LEAGUE, POSITIONS, myPicks, roundOf, teamOnClock, recommend, explain,
+  rosterNeed,
 } from './engine.js';
 import { planRounds } from './planner.js';
 
@@ -129,6 +130,7 @@ function render() {
   renderStrip();
   renderRec();
   renderList();
+  markRunChips();
   $('undoBtn').disabled = !state.history.length;
   save();
 }
@@ -140,10 +142,11 @@ function renderBar() {
   now.textContent = `Pick ${state.pick} · Round ${r}`;
   now.classList.toggle('live', onClock);
   const next = myPicks(league).find((p) => p >= state.pick);
+  const seat = teamOnClock(state.pick, league.teams);
   $('pickNext').textContent = onClock
     ? "You're on the clock"
-    : next ? `Your next pick: #${next} — ${next - state.pick} away`
-           : 'No picks left';
+    : next ? `Team ${seat} picking · your next is #${next}, ${next - state.pick} away`
+           : `Team ${seat} picking · no picks left for you`;
 }
 
 function renderStrip() {
@@ -167,6 +170,71 @@ function renderStrip() {
   if (now) now.scrollIntoView({ block: 'nearest', inline: 'center' });
 }
 
+
+/* ------------------------------------------------------------- strategy */
+
+/** Which positions are being taken faster than the board expects.
+ *
+ * The number that matters is pressure: demand from the specific teams picking
+ * before your turn, measured against what ADP alone predicts. Above ~1.5 means
+ * a run, and the reason a player you were planning to wait on may not be there.
+ */
+function renderStrategy() {
+  const s = ctx.strategy;
+  const head = $('stratHead');
+  const body = $('stratBody');
+  if (!s || !s.next) {
+    head.textContent = 'No picks left.';
+    body.innerHTML = '';
+    $('stratSheet').hidden = false;
+    return;
+  }
+
+  // A snake window doubles back, so the raw seat list repeats itself.
+  const seats = [...new Set(s.window.map((w) => w.seat))].sort((a, b) => a - b);
+  head.textContent = `${s.window.length} pick${s.window.length === 1 ? '' : 's'} ` +
+    `until your #${s.next} — team${seats.length === 1 ? '' : 's'} ${seats.join(', ')}`;
+
+  const rows = POSITIONS
+    .filter((pos) => pos !== 'K' && pos !== 'DST')
+    .map((pos) => ({ pos, press: s.pressure[pos] ?? 1, exp: s.demand[pos] ?? 0,
+                     adp: s.baseline[pos] ?? 0, seen: s.recent[pos] ?? 0 }))
+    .sort((a, b) => b.press - a.press);
+
+  body.innerHTML = rows.map((r) => {
+    const pct = Math.min(100, (r.press / 2.2) * 100);
+    const tone = r.press >= 1.5 ? 'hot' : r.press <= 0.8 ? 'cold' : '';
+    const verdict = r.press >= 1.5 ? 'run — move these up'
+      : r.press >= 1.15 ? 'going quicker than usual'
+      : r.press <= 0.8 ? 'quiet, safe to wait'
+      : 'about normal';
+    return `<div class="strat-row">
+      <div class="strat-top">
+        <b>${r.pos}</b>
+        <span class="strat-x ${tone}">${r.press.toFixed(2)}×</span>
+      </div>
+      <div class="strat-bar"><i class="${tone}" style="width:${pct}%"></i></div>
+      <div class="strat-note">${verdict} · about ${r.exp.toFixed(1)} expected vs
+        ${r.adp} by ADP · ${r.seen} taken in the last ${s.lookback} picks</div>
+    </div>`;
+  }).join('');
+
+  $('stratSheet').hidden = false;
+}
+
+/** Mark the position filter chips that are currently running hot. */
+function markRunChips() {
+  const s = ctx.strategy;
+  if (!s?.pressure) return;
+  for (const chip of $('posFilter').querySelectorAll('.chip')) {
+    const pos = chip.textContent.trim();
+    const press = s.pressure[pos];
+    const hot = press >= 1.5;
+    chip.classList.toggle('run', hot);
+    chip.title = press ? `${pos} going ${press.toFixed(2)}x vs ADP` : '';
+  }
+}
+
 function renderRec() {
   const el = $('recCard');
   const onClock = mineSet().has(state.pick);
@@ -174,35 +242,24 @@ function renderRec() {
   if (!top) { el.innerHTML = ''; return; }
   const p = top.player;
 
-  if (!onClock) {
-    const next = myPicks(league).find((q) => q >= state.pick);
-    el.innerHTML = `<div class="rec-card">
-      <div class="rec-tag">Leaning toward · pick ${next ?? '—'}</div>
-      <div class="rec-name">${esc(p.name)}</div>
-      <div class="rec-sub">${p.pos} · ${esc(p.team)} · ${p.pts} pts projected</div>
-      <div class="rec-why">${esc(explain(top, ctx, board))}</div>
-      <div class="rec-actions">
-        <button class="rec-skip" data-act="advance">Log the pick that just happened</button>
-      </div></div>`;
-  } else {
-    el.innerHTML = `<div class="rec-card">
-      <div class="rec-tag">Take now</div>
-      <div class="rec-name">${esc(p.name)}</div>
-      <div class="rec-sub">${p.pos} · ${esc(p.team)} · ${p.pts} pts projected</div>
-      <div class="rec-why">${esc(explain(top, ctx, board))}</div>
-      <div class="rec-actions">
+  // Off the clock the card is advice only -- logging a pick is a tap on the
+  // player in the list, whoever it belongs to.
+  const next = myPicks(league).find((q) => q >= state.pick);
+  const head = onClock
+    ? '<div class="rec-tag">Take now</div>'
+    : `<div class="rec-tag">Leaning toward · pick ${next ?? '—'}</div>`;
+  const action = onClock
+    ? `<div class="rec-actions">
         <button class="rec-take" data-act="take">Draft ${esc(p.name.split(' ').pop())}</button>
-        <button class="rec-skip" data-act="advance">Someone else picked</button>
-      </div></div>`;
-  }
-  el.querySelector('[data-act="take"]')?.addEventListener('click', () => takePlayer(p, true));
-  el.querySelector('[data-act="advance"]')?.addEventListener('click', () => openSheetHint());
-}
-
-function openSheetHint() {
-  toast('Search or tap the player who was taken');
-  $('search').focus();
-  $('search').scrollIntoView({ block: 'center', behavior: 'smooth' });
+      </div>`
+    : '';
+  el.innerHTML = `<div class="rec-card">
+    ${head}
+    <div class="rec-name">${esc(p.name)}</div>
+    <div class="rec-sub">${p.pos} · ${esc(p.team)} · ${p.pts} pts projected</div>
+    <div class="rec-why">${esc(explain(top, ctx, board))}</div>
+    ${action}</div>`;
+  el.querySelector('[data-act="take"]')?.addEventListener('click', () => logPick(p));
 }
 
 function renderList() {
@@ -248,9 +305,54 @@ function renderList() {
         ${surv === null ? '' : `<div class="row-surv ${surv < 35 ? 'hot' : ''}">${surv}% lasts</div>`}
         <div class="mix" title="market weight ${Math.round(p.w * 100)}%"><i style="width:${Math.round(p.w * 100)}%"></i></div>
       </div>`;
-    li.addEventListener('click', () => openSheet(p));
+    attachRowGestures(li, p);
     el.appendChild(li);
   }
+}
+
+/* Tap logs the pick; press and hold opens the details sheet.
+ *
+ * The hold has to swallow the click that follows it, or a long press would
+ * both show details and draft the player. Any real movement cancels the hold
+ * so scrolling the list never triggers it. */
+const HOLD_MS = 450;
+const HOLD_SLOP_PX = 10;
+
+function attachRowGestures(li, p) {
+  let timer = null;
+  let held = false;
+  let start = null;
+
+  const cancel = () => { clearTimeout(timer); timer = null; };
+
+  li.addEventListener('pointerdown', (e) => {
+    if (e.button && e.button !== 0) return;
+    held = false;
+    start = { x: e.clientX, y: e.clientY };
+    timer = setTimeout(() => {
+      held = true;
+      timer = null;
+      if (navigator.vibrate) navigator.vibrate(12);
+      openSheet(p);
+    }, HOLD_MS);
+  });
+
+  li.addEventListener('pointermove', (e) => {
+    if (!timer || !start) return;
+    if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > HOLD_SLOP_PX) cancel();
+  });
+
+  for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) {
+    li.addEventListener(ev, cancel);
+  }
+
+  li.addEventListener('click', (e) => {
+    if (held) { e.preventDefault(); e.stopPropagation(); held = false; return; }
+    logPick(p);
+  });
+
+  // Long-press on touch otherwise raises the OS text/callout menu.
+  li.addEventListener('contextmenu', (e) => e.preventDefault());
 }
 
 const HEALTHY = new Set(['ACTIVE', 'HEALTHY', 'NORMAL', '']);
@@ -262,15 +364,23 @@ function shortInjury(s) {
 
 /* ------------------------------------------------------------------ picks */
 
-function takePlayer(p, isMine) {
+/** Record a player against whichever seat is on the clock.
+ *
+ * There is nothing to ask: the pick number determines the team, so a tap is
+ * unambiguous. The seat is recomputed here rather than read from the UI so it
+ * always matches the counter, including after the counter has been corrected.
+ */
+function logPick(p) {
+  const seat = teamOnClock(state.pick, league.teams);
+  const isMine = seat === league.slot;
   state.taken.add(p.id);
   if (isMine) state.roster.push(p);
-  state.history.push({ id: p.id, mine: isMine, pick: state.pick });
+  state.history.push({ id: p.id, mine: isMine, pick: state.pick, team: seat });
   state.pick++;
   query = '';
   $('search').value = '';
   render();
-  toast(isMine ? `Drafted ${p.name}` : `${p.name} off the board`);
+  toast(isMine ? `Your pick · ${p.name}` : `Team ${seat} · ${p.name}`, undo);
 }
 
 function undo() {
@@ -301,7 +411,29 @@ function openSheet(p) {
 }
 
 function closeSheets() {
-  $('sheet').hidden = true; $('menu').hidden = true; $('newsSheet').hidden = true;
+  for (const id of ['sheet', 'menu', 'newsSheet', 'stratSheet']) $(id).hidden = true;
+}
+
+/** Nudge the pick counter when it has drifted from the real draft.
+ *
+ * Only the counter moves -- players already marked stay marked. Without this
+ * a single missed pick would leave every later pick filed under the wrong
+ * team, with no way back.
+ */
+function nudgePick(delta) {
+  const last = league.teams * league.rounds;
+  const next = Math.min(last, Math.max(1, state.pick + delta));
+  if (next === state.pick) return;
+  state.pick = next;
+  render();
+  renderPickFix();
+}
+
+function renderPickFix() {
+  const seat = teamOnClock(state.pick, league.teams);
+  const mine = seat === league.slot;
+  $('pickFixValue').textContent =
+    `Pick ${state.pick} · ${mine ? 'you' : `Team ${seat}`} · Round ${roundOf(state.pick, league.teams)}`;
 }
 
 function renderMenu() {
@@ -316,6 +448,7 @@ function renderMenu() {
       `<div class="roster-line"><b>${esc(p.name)}</b><span>${p.pos} · ${p.pts}${p.bye ? ` · bye ${p.bye}` : ''}</span></div>`).join('')
       + (unfilled ? `<div class="roster-line"><span>Still needed</span><span>${unfilled}</span></div>` : '');
   }
+  renderPickFix();
   $('menu').hidden = false;
 }
 
@@ -334,12 +467,24 @@ function esc(s) {
 }
 
 let toastTimer;
-function toast(msg) {
+
+/* A tap commits immediately, so the correction belongs next to the action
+   rather than only in the header. */
+function toast(msg, onUndo) {
   const t = $('toast');
-  t.textContent = msg;
+  t.textContent = '';
+  t.append(msg);
+  if (onUndo) {
+    const b = document.createElement('button');
+    b.className = 'toast-undo';
+    b.type = 'button';
+    b.textContent = 'Undo';
+    b.addEventListener('click', () => { t.hidden = true; onUndo(); });
+    t.append(b);
+  }
   t.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; }, 1900);
+  toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
 }
 
 /* ------------------------------------------------------------------- boot */
@@ -373,16 +518,16 @@ async function boot() {
   $('search').addEventListener('input', (e) => { query = e.target.value; renderList(); });
 
   $('sheet').addEventListener('click', (e) => {
-    const act = e.target.dataset?.act;
-    if (e.target === $('sheet') || act === 'cancel') return closeSheets();
-    if (act === 'mine') { closeSheets(); takePlayer(sheetPlayer, true); }
-    if (act === 'gone') { closeSheets(); takePlayer(sheetPlayer, false); }
+    if (e.target === $('sheet') || e.target.dataset?.act === 'close') closeSheets();
   });
 
   $('menu').addEventListener('click', (e) => {
     const act = e.target.dataset?.act;
     if (e.target === $('menu') || act === 'close') return closeSheets();
+    if (act === 'pick-') return nudgePick(-1);
+    if (act === 'pick+') return nudgePick(1);
     if (act === 'replan') { closeSheets(); rebuildPlan(); render(); toast('Round plan updated'); }
+    if (act === 'strategy') { $('menu').hidden = true; renderStrategy(); }
     if (act === 'news') { $('menu').hidden = true; renderNews(); }
     if (act === 'reset') {
       if (confirm('Reset this draft? Your picks will be cleared.')) {
@@ -392,9 +537,11 @@ async function boot() {
     }
   });
 
-  $('newsSheet').addEventListener('click', (e) => {
-    if (e.target === $('newsSheet') || e.target.dataset?.act === 'close') closeSheets();
-  });
+  for (const id of ['newsSheet', 'stratSheet']) {
+    $(id).addEventListener('click', (e) => {
+      if (e.target === $(id) || e.target.dataset?.act === 'close') closeSheets();
+    });
+  }
 
   // Must be served from the site root: a worker at assets/sw.js would get
   // scope /assets/ and could not control the page it is meant to cache.

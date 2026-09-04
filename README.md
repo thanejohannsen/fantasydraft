@@ -68,6 +68,34 @@ Kickers and defences are held back until the end, and replacement level for them
 is set at the bottom of the pool — they're streamable off waivers all season, so
 the best one is worth barely more than the twentieth.
 
+### Reacting to runs
+
+Every pick is attributed to a seat (derived from the pick number and the snake
+order), so the tool knows what each team already has. That lets it answer the
+question ADP cannot: **is this position going faster than normal right now?**
+
+For each position it compares two numbers over the picks between now and your
+next turn — what the specific teams picking next still *need*, versus what ADP
+alone predicts — and reports the ratio as **pressure**. Survival is then raised
+to that power, which pushes it down during a run while keeping it a probability.
+
+The two signals deliberately disagree sometimes, and the design accounts for it:
+
+- **Demand** is forward-looking but anti-correlated with a run in progress —
+  four teams taking quarterbacks are four teams that no longer need one.
+- **Pace** (recent picks by position) is the actual run detector, but it is
+  applied asymmetrically. A burst at one position is real evidence it is hot;
+  the resulting absence of picks elsewhere is not evidence those are cold,
+  because during a five-pick run nothing else could have gone anyway.
+- **ADP is the prior, not the rival.** It already encodes how people draft in
+  aggregate, so roster-need updates it rather than replacing it. Used alone the
+  need model handed running backs 7.5 of 12 picks where ADP expected 4.
+
+In practice: with five quarterbacks gone in five picks, QB pressure reads
+`2.04×` and the panel says *run — move these up*. An elite quarterback still on
+the board goes from 6% to 1% likely to last, and his urgency more than doubles.
+Menu → **What's coming before my pick** shows the whole picture.
+
 ## Round-by-round plan
 
 At setup the browser runs a few hundred simulated drafts — opponents pick near

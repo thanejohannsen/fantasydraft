@@ -220,3 +220,48 @@ button.ghost.danger { color: var(--bad); border-color: #4b2226; }
 }
 
 .empty { padding: 34px 18px; text-align: center; color: var(--dim); font-size: 14px; }
+
+/* ------------------------------------------------- tap hint & pick repair */
+
+.tap-hint { margin: 0 0 9px; font-size: 11.5px; color: #6b7688; }
+
+.pick-fix {
+  display: flex; align-items: center; justify-content: space-between;
+  margin: 12px 18px 0; padding: 10px 10px 10px 14px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 11px;
+}
+.pick-fix-label { font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: var(--dim); }
+.pick-fix-value { font-size: 15px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.pick-fix-note { margin: 8px 18px 2px; font-size: 11.5px; color: var(--dim); line-height: 1.45; }
+
+/* Rows commit on tap, so nothing in them should be selectable or draggable --
+   a long press must reach the details handler, not the OS text selection. */
+.row { user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+
+.toast { display: flex; align-items: center; gap: 12px; justify-content: center; }
+.toast-undo {
+  flex: none; background: transparent; border: 0; padding: 2px 2px 2px 0;
+  color: var(--accent); font: inherit; font-weight: 650; cursor: pointer;
+}
+
+/* ------------------------------------------------------------- strategy */
+
+.strat { padding: 8px 18px 4px; }
+.strat-row { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.strat-top { display: flex; justify-content: space-between; align-items: baseline; }
+.strat-top b { font-size: 14px; }
+.strat-x { font-size: 13px; font-variant-numeric: tabular-nums; color: var(--dim); }
+.strat-x.hot { color: var(--warn); font-weight: 650; }
+.strat-x.cold { color: var(--good); }
+.strat-bar { height: 5px; border-radius: 3px; background: #2a3240; overflow: hidden; margin: 6px 0 5px; }
+.strat-bar i { display: block; height: 100%; background: var(--accent); }
+.strat-bar i.hot { background: var(--warn); }
+.strat-bar i.cold { background: var(--good); }
+.strat-note { font-size: 11.5px; color: var(--dim); line-height: 1.45; }
+
+/* A position running hot gets a dot on its filter chip. */
+.chip.run { position: relative; }
+.chip.run::after {
+  content: ''; position: absolute; top: 4px; right: 5px;
+  width: 6px; height: 6px; border-radius: 50%; background: var(--warn);
+}
