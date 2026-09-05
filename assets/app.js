@@ -3,7 +3,7 @@
 
 import {
   DEFAULT_LEAGUE, POSITIONS, myPicks, roundOf, teamOnClock, recommend, explain,
-  rosterNeed,
+  rosterNeed, byeCounts,
 } from './engine.js';
 import { planRounds } from './planner.js';
 
@@ -365,32 +365,64 @@ function renderRec() {
   el.querySelector('[data-act="take"]')?.addEventListener('click', () => logPick(p));
 }
 
+const RENDER_CAP = 60;
+
+/* The list does two jobs, and conflating them was the bug behind players
+   vanishing. Unfiltered it is a *recommendation*: the ranked shortlist. The
+   moment you search or pick a position it becomes a *lookup*, and a lookup has
+   to see the whole board -- otherwise filling your QB slot pushes every
+   remaining quarterback below the shortlist cut and they cannot be found at
+   all, let alone marked as taken by someone else. */
+function visibleRows() {
+  const q = query.trim().toLowerCase();
+  const looking = Boolean(q || filterPos);
+  if (!looking) return ctx.list.slice(0, RENDER_CAP);
+
+  // Scores exist only for players the engine ranked; everyone else still needs
+  // a row, just without the recommendation furniture.
+  const scored = new Map(ctx.all.map((s) => [s.player.id, s]));
+  const matches = [];
+  for (const p of board.players) {
+    if (state.taken.has(p.id)) continue;
+    if (filterPos && p.pos !== filterPos) continue;
+    if (q && !(p.name.toLowerCase().includes(q) || p.team.toLowerCase() === q)) continue;
+    matches.push(scored.get(p.id) || { player: p, vorp: 0, survival: 0, blocked: false });
+    if (matches.length >= 400) break;      // searching is unbounded; drawing is not
+  }
+  matches.sort((a, b) => b.player.pts - a.player.pts);
+  return matches.slice(0, RENDER_CAP);
+}
+
 function renderList() {
   const el = $('list');
-  const q = query.trim().toLowerCase();
-  let rows = ctx.list;
-  if (filterPos) rows = rows.filter((s) => s.player.pos === filterPos);
-  if (q) rows = rows.filter((s) => s.player.name.toLowerCase().includes(q)
-                                || s.player.team.toLowerCase() === q);
-  rows = rows.slice(0, 60);
+  const rows = visibleRows();
 
   if (!rows.length) {
-    el.innerHTML = '<li class="empty">No players match.</li>';
+    el.innerHTML = '<li class="empty">No player matches.'
+      + '<button class="unlisted" data-act="unlisted">Log an unlisted pick</button></li>';
+    el.querySelector('[data-act="unlisted"]')
+      ?.addEventListener('click', () => logPick(null));
     return;
   }
 
+  const byes = byeCounts(state.roster);
   el.innerHTML = '';
   for (const s of rows) {
     const p = s.player;
     const li = document.createElement('li');
-    li.className = 'row';
+    li.className = 'row' + (s.blocked ? ' row-blocked' : '');
 
     const meta = [];
     meta.push(`<span>${p.adp ? `ADP ${p.adp}` : 'no ADP'}</span>`);
-    if (p.bye) meta.push(`<span>bye ${p.bye}</span>`);
+    if (p.bye) {
+      const clash = (byes[p.bye] || 0) >= (league.byeLimit ?? 2)
+        && p.pos !== 'K' && p.pos !== 'DST';
+      meta.push(`<span class="badge${clash ? ' bye-warn' : ''}">bye ${p.bye}</span>`);
+    }
     if (p.p?.['3']) meta.push(`<span class="badge mkt">top3 ${Math.round(p.p['3'] * 100)}%</span>`);
     else if (p.p?.['1']) meta.push(`<span class="badge mkt">top1 ${Math.round(p.p['1'] * 100)}%</span>`);
     if (p.injury && !HEALTHY.has(p.injury)) meta.push(`<span class="badge inj">${esc(shortInjury(p.injury))}</span>`);
+    if (s.blocked) meta.push('<span class="badge">roster full</span>');
     if (p.d7 && Math.abs(p.d7) >= 0.02) {
       const up = p.d7 > 0;
       meta.push(`<span class="badge ${up ? 'up' : 'down'}">${up ? '▲' : '▼'} ${Math.abs(Math.round(p.d7 * 100))}c</span>`);
@@ -476,21 +508,27 @@ function shortInjury(s) {
 function logPick(p) {
   const seat = teamOnClock(state.pick, league.teams);
   const isMine = seat === league.slot;
-  state.taken.add(p.id);
-  if (isMine) state.roster.push(p);
-  state.history.push({ id: p.id, mine: isMine, pick: state.pick, team: seat });
+
+  // A null player is a pick by someone the board does not list. Recording it
+  // keeps the counter, the seat attribution and the run-pressure window honest;
+  // pretending it did not happen would desync everything after it.
+  const id = p ? p.id : `unlisted:${state.pick}`;
+  state.taken.add(id);
+  if (p && isMine) state.roster.push(p);
+  state.history.push({ id, mine: isMine, pick: state.pick, team: seat, unlisted: !p });
   state.pick++;
   query = '';
   $('search').value = '';
   render();
-  toast(isMine ? `Your pick · ${p.name}` : `Team ${seat} · ${p.name}`, undo);
+  const who = p ? p.name : 'unlisted player';
+  toast(isMine ? `Your pick · ${who}` : `Team ${seat} · ${who}`, undo);
 }
 
 function undo() {
   const last = state.history.pop();
   if (!last) return;
   state.taken.delete(last.id);
-  if (last.mine) state.roster.pop();
+  if (last.mine && !last.unlisted) state.roster.pop();
   state.pick = last.pick;
   render();
   toast('Undone');
@@ -547,9 +585,15 @@ function renderMenu() {
     const { need } = rosterNeed(state.roster, league);
     const unfilled = Object.entries(need).filter(([, n]) => n > 0)
       .map(([p, n]) => `${p}×${n}`).join(', ');
+    const byes = byeCounts(state.roster);
+    const limit = league.byeLimit ?? 2;
+    const stacked = Object.entries(byes).sort((a, b) => b[1] - a[1])
+      .map(([wk, n]) => `<span class="${n > limit ? 'bye-over' : ''}">wk ${wk}: ${n}</span>`)
+      .join(' · ');
     el.innerHTML = state.roster.map((p) =>
       `<div class="roster-line"><b>${esc(p.name)}</b><span>${p.pos} · ${p.pts}${p.bye ? ` · bye ${p.bye}` : ''}</span></div>`).join('')
-      + (unfilled ? `<div class="roster-line"><span>Still needed</span><span>${unfilled}</span></div>` : '');
+      + (unfilled ? `<div class="roster-line"><span>Still needed</span><span>${unfilled}</span></div>` : '')
+      + (stacked ? `<div class="roster-line"><span>Byes (max ${limit})</span><span>${stacked}</span></div>` : '');
   }
   renderPickFix();
   renderFreshness();

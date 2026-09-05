@@ -11,6 +11,7 @@ export const DEFAULT_LEAGUE = {
   teams: 12,
   slot: 6,
   rounds: 15,
+  byeLimit: 2,        // players you're willing to have share a bye week
   starters: { QB: 1, RB: 2, WR: 2, TE: 1, FLEX: 1, K: 1, DST: 1 },
 };
 
@@ -326,6 +327,32 @@ export function needMultiplier(pos, roster, league, picksLeft) {
   return 0.55;                                   // pure bench depth
 }
 
+
+/* ------------------------------------------------------------- bye weeks */
+
+/** How many of your players already sit on each bye week. */
+export function byeCounts(roster) {
+  const out = {};
+  for (const p of roster) if (p.bye) out[p.bye] = (out[p.bye] || 0) + 1;
+  return out;
+}
+
+/**
+ * Discourage stacking a bye week, without forbidding it.
+ *
+ * A hard cap would force a clearly worse pick just to dodge a week, so this is
+ * a soft penalty that bites progressively past the limit. K and D/ST are exempt
+ * -- both are streamed off waivers on their bye anyway, so a shared week there
+ * costs nothing.
+ */
+export function byeMultiplier(player, roster, league) {
+  const limit = league.byeLimit ?? 2;
+  if (!player.bye || player.pos === 'K' || player.pos === 'DST') return 1;
+  const already = byeCounts(roster)[player.bye] || 0;
+  if (already < limit) return 1;
+  return already === limit ? 0.7 : 0.45;
+}
+
 /* --------------------------------------------------------- recommendation */
 
 /**
@@ -375,7 +402,8 @@ export function recommend(board, league, state, limit = 40) {
   const scored = available.map((p) => {
     const v = vorp(p, replacement);
     const gain = nextPick ? v - (bestNext[p.pos] ?? 0) : v;
-    const mult = needMultiplier(p.pos, roster, league, picksLeft);
+    const mult = needMultiplier(p.pos, roster, league, picksLeft)
+      * byeMultiplier(p, roster, league);
     // Momentum is a tiebreaker only: a market moving against a player is a
     // signal, but never one that outweighs value.
     const drift = (p.d7 || 0) * (p.w || 0) * 12;
@@ -399,9 +427,17 @@ export function recommend(board, league, state, limit = 40) {
   for (const s of scored) s.score = (s.base - floor) * s.mult;
 
   scored.sort((a, b) => b.score - a.score);
+
+  // `blocked` means "not a pick for you" -- a third quarterback, a second
+  // kicker. It must never mean "cannot be recorded". Dropping those players
+  // from the result made them unloggable, so an opponent taking one left them
+  // marked available for the rest of the draft, which quietly corrupted
+  // bestNext, survival and the run-pressure model. They are returned flagged
+  // and simply kept out of the recommendation.
   return {
     list: scored.filter((s) => !s.blocked).slice(0, limit),
-    nextPick, replacement, bestNext, strategy,
+    all: scored,
+    nextPick, replacement, bestNext, strategy, roster, league,
   };
 }
 
@@ -422,6 +458,11 @@ export function explain(top, ctx, board) {
     bits.push(`${p.pos} demand is soft right now, so this can wait`);
   }
   if (top.gain > 12) bits.push(`the ${p.pos} board drops off hard before your next turn`);
+  const onBye = p.bye ? (byeCounts(ctx.roster || []) [p.bye] || 0) : 0;
+  const byeLimit = ctx.league?.byeLimit ?? 2;
+  if (onBye >= byeLimit && p.pos !== 'K' && p.pos !== 'DST') {
+    bits.push(`would be your ${onBye + 1}th player on the week ${p.bye} bye`);
+  }
   if (p.w >= 0.4) bits.push('market-backed');
   else if (p.w === 0) bits.push('projection only, no market coverage');
   if (p.d7 && p.w > 0.2) {

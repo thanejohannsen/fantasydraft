@@ -275,3 +275,17 @@ button.ghost.danger { color: var(--bad); border-color: #4b2226; }
 .fresh-line { display: flex; justify-content: space-between; font-size: 13px; padding: 2px 0; }
 .fresh-line span { color: var(--dim); }
 .fresh-line b { font-weight: 600; }
+
+/* A player who is not a pick *for you* is still a pick someone made, so the
+   row stays tappable -- just visibly not a suggestion. */
+.row-blocked { opacity: .55; }
+.row-blocked .row-vorp { color: var(--dim); font-weight: 500; }
+
+.unlisted {
+  display: block; margin: 14px auto 0; min-height: 42px; padding: 0 18px;
+  background: var(--panel-2); color: var(--ink); border: 1px solid var(--line);
+  border-radius: 10px; font: inherit; font-size: 14px; cursor: pointer;
+}
+
+.bye-warn { background: #4a3312 !important; color: #f0c078 !important; }
+.bye-over { color: var(--warn); font-weight: 650; }
