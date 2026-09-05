@@ -68,6 +68,34 @@ Kickers and defences are held back until the end, and replacement level for them
 is set at the bottom of the pool — they're streamable off waivers all season, so
 the best one is worth barely more than the twentieth.
 
+### Bye weeks
+
+Taking a third player on a bye week you already have two of carries a soft
+penalty (`byeLimit`, default 2) — ×0.7 for the third, ×0.45 beyond. Soft on
+purpose: a hard cap would force a clearly worse pick just to dodge a week.
+Kickers and defences are exempt, since you stream them on their bye anyway.
+
+Conflicts are never a silent nudge: the bye badge turns amber, the roster panel
+counts players per week, and the reason line says "would be your 3rd player on
+the week 11 bye".
+
+### Finding and logging picks
+
+The list does two jobs, and they need different rules. Unfiltered it is a
+*recommendation* — the ranked shortlist. The moment you search or tap a position
+it becomes a *lookup* over the whole board, so every undrafted player is always
+findable and every pick is always loggable.
+
+That distinction matters more than it sounds: filtering the lookup by what's
+good *for you* meant that once your QB slot was filled, every remaining
+quarterback fell off the shortlist and became unfindable — and past a roster cap
+they became impossible to mark as taken at all, leaving them "available" forever
+and corrupting the survival and run-pressure models. Players at a cap now still
+appear, dimmed and marked *roster full*: not a suggestion, but always recordable.
+
+If a player genuinely isn't in the dataset, a **Log an unlisted pick** row keeps
+the counter and seat attribution correct without inventing a fake player.
+
 ### Reacting to runs
 
 Every pick is attributed to a seat (derived from the pick number and the snake
